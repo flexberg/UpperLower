@@ -175,6 +175,32 @@ h1{text-align:center}
 @media (prefers-reduced-motion: reduce){.fail{transition:none}}
 
 .backup{display:flex;gap:8px;justify-content:center;margin:0 0 14px}
+
+/* v2 additions */
+.plate .dr{position:absolute;top:1px;right:1px;width:9px;height:9px;border-radius:50%;background:var(--bone);box-shadow:0 0 6px rgba(255,255,255,.6)}
+.datebar{display:flex;justify-content:center;align-items:center;gap:10px;margin:-8px 0 20px;color:var(--muted);font:600 .95rem "Barlow Condensed",sans-serif;letter-spacing:.08em;flex-wrap:wrap}
+.datebar input{background:var(--field);color:var(--ink);border:1px solid var(--line);border-radius:2px;padding:6px 10px;font:600 1rem "Barlow",sans-serif;min-height:40px;color-scheme:dark}
+.extools{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.mini{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:2px;padding:5px 10px;font:600 .85rem "Barlow Condensed",sans-serif;letter-spacing:.06em;cursor:pointer;min-height:34px}
+.mini:hover:not(:disabled){color:var(--ink);border-color:var(--bone)}
+.mini:disabled{opacity:.35;cursor:default}
+.swapnote{color:var(--bone);margin-top:-6px}
+.field.miss input{border-color:var(--red);box-shadow:0 0 0 1px var(--red),0 0 12px rgba(196,18,31,.45)}
+.banner{background:var(--surface);border:1px solid var(--red);border-radius:2px;padding:12px 14px;margin:0 4px 14px;color:#CFCFCF;font-size:.92rem;display:grid;gap:10px}
+.banner .ghost{justify-self:start}
+.seg{display:grid;grid-template-columns:1fr 1fr;margin:0 4px 14px;border:1px solid var(--line);border-radius:2px}
+.seg button{background:transparent;border:0;color:var(--muted);font:600 1rem "Barlow Condensed",sans-serif;letter-spacing:.1em;padding:8px;cursor:pointer}
+.seg button[aria-selected="true"]{background:var(--red);color:#fff}
+.bnote{margin:-6px 0 14px}
+.bnote.overdue{color:var(--red-hi)}
+.spark{display:block;width:100%;max-width:240px;height:auto;margin-top:6px}
+.prog .meta{margin:2px 0}
+.hist .actions{gap:8px}
+.editform .editex{border-top:1px solid var(--line);padding:10px 0 4px}
+.editform h4{margin:0;font:700 1.1rem "Barlow Condensed",sans-serif;letter-spacing:.03em}
+.editform .datebar{margin:4px 0 10px;justify-content:flex-start}
+.ghost.save{color:#fff;background:var(--red);border-color:var(--red-hi)}
+
 /* splash */
 .splash{position:fixed;inset:0;z-index:100;background:#050505;color:#E9E9E9;display:grid;place-items:center;overflow:hidden;cursor:pointer;transition:opacity .35s ease}
 .splash.out{opacity:0;pointer-events:none}
@@ -379,31 +405,59 @@ function lsSet(k,v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch {
   document.addEventListener("keydown", done, { once: true });
 })();
 
-let state = lsGet(LS_KEY) || { nextIdx:0, sessions:[] };
-let draft = lsGet(DRAFT_KEY) || { values:{} };
-if (!draft.values) draft.values = {};
+// ---------- state ----------
+const pad = n => String(n).padStart(2, "0");
+const localStr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const todayStr = () => localStr(new Date());
+function isoFor(dateStr){
+  if (dateStr === todayStr()) return new Date().toISOString();
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d, 12).toISOString();
+}
+const idxOf = id => PROGRAM.findIndex(p => p.id === id);
+
+let state = lsGet(LS_KEY) || { nextIdx: 0, sessions: [] };
+let draft = lsGet(DRAFT_KEY) || {};
+draft.values = draft.values || {}; draft.swaps = draft.swaps || {}; draft.extra = draft.extra || {};
 let selIdx = Number.isInteger(draft.dayIdx) ? draft.dayIdx : state.nextIdx;
-let tab = "today";
-let remote = null; // {profile, col} when db is available
+let tab = "today", histView = "sessions";
+let logDate = todayStr();
+let missing = new Set();          // "key:i" sets with weight/failure but no reps (Today)
+let editing = null;               // { id, date, values:{name:[{w,r,f}]}, missing:Set }
 
 function toast(msg){
   const t = $("#toast"); t.textContent = msg; t.classList.add("show");
   clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), msg.length > 45 ? 3400 : 2200);
 }
-const glow = p => p.c==="#C4121F" ? "rgba(196,18,31,.6)" : p.c==="#D6D6D6" ? "rgba(214,214,214,.3)" : "transparent";
+const glow = p => p.c === "#C4121F" ? "rgba(196,18,31,.6)" : p.c === "#D6D6D6" ? "rgba(214,214,214,.3)" : "transparent";
 function saveDraft(){ draft.dayIdx = selIdx; lsSet(DRAFT_KEY, draft); }
 function cacheState(){ lsSet(LS_KEY, state); }
-
+function sortSessions(){ state.sessions.sort((a, b) => b.date.localeCompare(a.date)); }
+function syncNext(){
+  const last = state.sessions[0];
+  state.nextIdx = last && idxOf(last.dayId) >= 0 ? (idxOf(last.dayId) + 1) % PROGRAM.length : 0;
+}
+// which day the rotation expects for a given date (based on the last session before it)
+function expectedIdxFor(iso){
+  const prev = state.sessions.find(s => s.date < iso);
+  return prev && idxOf(prev.dayId) >= 0 ? (idxOf(prev.dayId) + 1) % PROGRAM.length : state.nextIdx;
+}
+function hasDraft(dayId){
+  return Object.entries(draft.values).some(([k, arr]) => k.startsWith(dayId + ":") && (arr || []).some(v => v && (v.w || v.r || v.f)));
+}
 function lastFor(name){
   for (const s of state.sessions){
-    const e = (s.entries||[]).find(e => e.name === name && e.sets && e.sets.length);
+    const e = (s.entries || []).find(e => e.name === name && e.sets && e.sets.length);
     if (e) return e.sets;
   }
   return null;
 }
+const e1 = s => { const w = parseFloat(s.w), r = parseInt(s.r, 10); return w > 0 && r > 0 ? w * (1 + r / 30) : 0; };
+const bestE1 = name => state.sessions.reduce((b, s) => Math.max(b, ...(s.entries || []).filter(e => e.name === name).flatMap(e => e.sets.map(e1)), 0), 0);
 const fmtSets = sets => sets.map(s => (s.w !== "" && s.w != null ? s.w + "×" : "") + s.r + (s.f ? "†" : "")).join(", ");
-const fmtDate = iso => new Date(iso).toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short"});
-
+const fmtDate = iso => new Date(iso).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+const isStandalone = () => (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 const dayNum = iso => { const d = new Date(iso); return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 864e5; };
 function streakInfo(){
@@ -438,22 +492,39 @@ function streakToast(){
   else toast(`${st.current}-day streak. Log ${PROGRAM[state.nextIdx].name} today to keep it.`);
 }
 
+
+// ---------- render ----------
 function render(){
-  $("#tab-today").setAttribute("aria-selected", tab==="today");
-  $("#tab-history").setAttribute("aria-selected", tab==="history");
-  $("#tab-study").setAttribute("aria-selected", tab==="study");
-  $("#savebar").style.display = tab==="today" ? "" : "none";
+  $("#tab-today").setAttribute("aria-selected", tab === "today");
+  $("#tab-history").setAttribute("aria-selected", tab === "history");
+  $("#tab-study").setAttribute("aria-selected", tab === "study");
+  $("#savebar").style.display = tab === "today" ? "" : "none";
   if (tab === "today") renderToday(); else if (tab === "history") renderHistory(); else renderStudy();
   renderStreak();
 }
 
+const setRow = (attrs, i, v, l, miss, label) => `<div class="setrow">
+  <span>Set ${i + 1}</span>
+  <label class="field"><input inputmode="decimal" ${attrs} data-i="${i}" data-f="w" value="${esc(v.w || "")}" placeholder="${esc(l.w ?? "")}" aria-label="${label} set ${i + 1} weight"><em>kg</em></label>
+  <label class="field ${miss ? "miss" : ""}"><input inputmode="numeric" ${attrs} data-i="${i}" data-f="r" value="${esc(v.r || "")}" placeholder="${esc(l.r ?? "")}" aria-label="${label} set ${i + 1} reps"><em>reps</em></label>
+  <button class="fail ${v.f ? "on" : ""}" ${attrs.replace(/data-(e?)key=/, "data-$1fkey=")} data-i="${i}" aria-pressed="${!!v.f}" aria-label="${label} set ${i + 1} taken to failure">${SKULL}</button>
+</div>`;
+
 function renderToday(){
   const d = PROGRAM[selIdx];
-  const plates = PROGRAM.map((p,i) => `
-    <button class="plate ${p.id==="REST"?"rest":""}" style="--c:${p.c};--pc:${p.pc};--glow:${glow(p)}" data-day="${i}"
-      aria-pressed="${i===selIdx}" aria-label="${esc(p.name)}${i===state.nextIdx?" (up next)":""}">
-      <b>${esc(p.short)}</b>${i===state.nextIdx?'<i class="next"></i>':""}
+  const plates = PROGRAM.map((p, i) => `
+    <button class="plate ${p.id === "REST" ? "rest" : ""}" style="--c:${p.c};--pc:${p.pc};--glow:${glow(p)}" data-day="${i}"
+      aria-pressed="${i === selIdx}" aria-label="${esc(p.name)}${i === state.nextIdx ? " (up next)" : ""}${hasDraft(p.id) ? " (unsaved entries)" : ""}">
+      <b>${esc(p.short)}</b>${i === state.nextIdx ? '<i class="next"></i>' : ""}${hasDraft(p.id) ? '<i class="dr"></i>' : ""}
     </button>`).join("");
+
+  const banner = isMobile && !isStandalone() && !lsGet("ul-log-banner-ok") ? `<div class="banner">
+    You're in the browser. On iPhone, the browser and the home-screen app keep separate data, so add the app to your home screen and log there.
+    <button class="ghost" id="bannerOk">Got it</button></div>` : "";
+
+  const dateBar = `<div class="datebar"><label for="logDate">Logging for</label>
+    <input type="date" id="logDate" value="${logDate}" max="${todayStr()}">
+    ${logDate !== todayStr() ? `<button class="mini" id="dateToday">Today</button>` : ""}</div>`;
 
   let body;
   if (d.id === "REST"){
@@ -461,55 +532,117 @@ function renderToday(){
     $("#saveBtn").textContent = "Mark rest day done";
   } else {
     $("#saveBtn").textContent = "Save session";
-    body = d.ex.map(([name, sets, range]) => {
-      const key = d.id + ":" + name;
+    body = d.ex.map(([orig, baseSets, range]) => {
+      const key = d.id + ":" + orig;
+      const name = draft.swaps[key] || orig;
+      const extra = draft.extra[key] || 0;
+      const sets = baseSets + extra;
       const vals = draft.values[key] || [];
       const last = lastFor(name);
       const top = parseInt(range.split("-")[1], 10);
-      const hitTop = last && last.length && last.every(s => Number(s.r) >= top);
-      const rows = Array.from({length: sets}, (_, i) => {
-        const v = vals[i] || {}, l = last && last[i] || {};
-        return `<div class="setrow">
-          <span>Set ${i+1}</span>
-          <label class="field"><input inputmode="decimal" data-key="${esc(key)}" data-i="${i}" data-f="w" value="${esc(v.w||"")}" placeholder="${esc(l.w??"")}" aria-label="${esc(name)} set ${i+1} weight"><em>kg</em></label>
-          <label class="field"><input inputmode="numeric" data-key="${esc(key)}" data-i="${i}" data-f="r" value="${esc(v.r||"")}" placeholder="${esc(l.r??"")}" aria-label="${esc(name)} set ${i+1} reps"><em>reps</em></label>
-          <button class="fail ${v.f ? "on" : ""}" data-fkey="${esc(key)}" data-i="${i}" aria-pressed="${!!v.f}" aria-label="${esc(name)} set ${i+1} taken to failure">${SKULL}</button>
-        </div>`;
-      }).join("");
+      const hitTop = last && last.length >= baseSets && last.every(s => Number(s.r) >= top);
+      const hasLastW = last && last.some(s => s.w);
+      const rows = Array.from({ length: sets }, (_, i) =>
+        setRow(`data-key="${esc(key)}"`, i, vals[i] || {}, (last && last[i]) || {}, missing.has(key + ":" + i), esc(name))).join("");
       return `<section class="ex">
         <h3>${esc(name)}</h3>
-        <p class="meta">Target ${sets} × ${range.replace("-","–")} reps${last ? ". Last time: " + esc(fmtSets(last)) : ""}</p>
+        <p class="meta">Target ${baseSets} × ${range.replace("-", "–")} reps${extra ? ` (+${extra} extra today)` : ""}${last ? ". Last time: " + esc(fmtSets(last)) : ""}</p>
+        ${name !== orig ? `<p class="meta swapnote">Swapped from ${esc(orig)} for today.</p>` : ""}
         ${hitTop ? `<p class="hint">Hit the top of the range last time. Add weight.</p>` : ""}
         ${rows}
+        <div class="extools">
+          <button class="mini" data-lastw="${esc(key)}" ${hasLastW ? "" : "disabled"}>Last weights</button>
+          <button class="mini" data-swap="${esc(key)}">Swap</button>
+          <button class="mini" data-addset="${esc(key)}">+ Set</button>
+          ${extra ? `<button class="mini" data-rmset="${esc(key)}">− Set</button>` : ""}
+        </div>
       </section>`;
     }).join("");
   }
 
-  $("#view").innerHTML = `
+  const upNext = selIdx === state.nextIdx && logDate === todayStr();
+  $("#view").innerHTML = `${banner}
     <div class="plates" role="group" aria-label="Choose day">${plates}</div>
     <div class="dayhead" style="--c:${d.c};--glow:${glow(d)}">
-      <h2>${esc(d.name)}</h2>${ORN}<p>${esc(d.focus)}${selIdx===state.nextIdx ? ", up next in your rotation" : ""}</p>
+      <h2>${esc(d.name)}</h2>${ORN}<p>${esc(d.focus)}${upNext ? ", up next in your rotation" : ""}</p>
     </div>
+    ${dateBar}
     ${body}`;
 }
 
+function backupHtml(){
+  const le = lsGet("ul-log-lastexport");
+  const days = le ? Math.floor((Date.now() - le) / 864e5) : null;
+  const overdue = state.sessions.length >= 3 && (days === null || days >= 14);
+  const note = le ? `Last backup: ${days === 0 ? "today" : days === 1 ? "yesterday" : days + " days ago"}` : "No backup yet";
+  return `<div class="backup"><button class="ghost" id="exportBtn">Export backup</button><button class="ghost" id="importBtn">Import backup</button><input type="file" id="importFile" accept="application/json,.json" hidden></div>
+    <p class="status bnote ${overdue ? "overdue" : ""}">${note}</p>`;
+}
+
 function renderHistory(){
+  const seg = `<div class="seg" role="tablist">
+    <button role="tab" data-hview="sessions" aria-selected="${histView === "sessions"}">Sessions</button>
+    <button role="tab" data-hview="progress" aria-selected="${histView === "progress"}">Progress</button></div>`;
+  if (histView === "progress"){ $("#view").innerHTML = backupHtml() + seg + progressHtml(); return; }
   if (!state.sessions.length){
-    $("#view").innerHTML = BACKUP + `<p class="empty">No sessions yet. Log your first one on the Today tab.</p>`;
+    $("#view").innerHTML = backupHtml() + seg + `<p class="empty">No sessions yet. Log your first one on the Today tab.</p>`;
     return;
   }
-  $("#view").innerHTML = BACKUP + `<p class="status" style="margin:0 0 12px">† = taken to failure</p><div class="hist">` + state.sessions.map(s => {
+  $("#view").innerHTML = backupHtml() + seg + `<p class="status" style="margin:0 0 12px">† = taken to failure</p><div class="hist">` + state.sessions.map(s => {
     const p = PROGRAM.find(p => p.id === s.dayId) || PROGRAM[6];
-    const n = (s.entries||[]).reduce((a,e) => a + e.sets.length, 0);
-    const rows = (s.entries||[]).map(e => `<tr><td>${esc(e.name)}</td><td>${esc(fmtSets(e.sets))}</td></tr>`).join("");
-    return `<details style="--c:${p.c}">
-      <summary><strong>${esc(s.dayName)}</strong><span>${esc(fmtDate(s.date))}${p.id!=="REST" ? ", " + n + (n === 1 ? " set" : " sets") : ""}</span></summary>
-      <div class="body">${rows ? `<table>${rows}</table>` : ""}
-        <div class="actions"><button class="ghost" data-del="${esc(s.id)}">Delete session</button></div>
+    const n = (s.entries || []).reduce((a, e) => a + e.sets.length, 0);
+    const isEdit = editing && editing.id === s.id;
+    const rows = (s.entries || []).map(e => `<tr><td>${esc(e.name)}</td><td>${esc(fmtSets(e.sets))}</td></tr>`).join("");
+    return `<details style="--c:${p.c}" ${isEdit ? "open" : ""}>
+      <summary><strong>${esc(s.dayName)}</strong><span>${esc(fmtDate(s.date))}${p.id !== "REST" ? ", " + n + (n === 1 ? " set" : " sets") : ""}</span></summary>
+      <div class="body">${isEdit ? editForm(s, p) : `${rows ? `<table>${rows}</table>` : ""}
+        <div class="actions"><button class="ghost" data-edit="${esc(s.id)}">Edit</button><button class="ghost" data-del="${esc(s.id)}">Delete</button></div>`}
       </div></details>`;
   }).join("") + `</div>`;
 }
 
+function editForm(s, p){
+  const names = [...new Set([...(p.ex || []).map(x => x[0]), ...(s.entries || []).map(e => e.name)])];
+  const base = name => { const x = (p.ex || []).find(x => x[0] === name); return x ? x[1] : 0; };
+  const blocks = p.id === "REST" ? "" : names.map(name => {
+    const vals = editing.values[name] || [];
+    const count = Math.max(base(name), vals.length, 1);
+    return `<div class="editex"><h4>${esc(name)}</h4>${Array.from({ length: count }, (_, i) =>
+      setRow(`data-ekey="${esc(name)}"`, i, vals[i] || {}, {}, editing.missing.has(name + ":" + i), esc(name))).join("")}
+      <div class="extools"><button class="mini" data-eadd="${esc(name)}">+ Set</button></div></div>`;
+  }).join("");
+  return `<div class="editform">
+    <div class="datebar"><label for="editDate">Date</label><input type="date" id="editDate" value="${editing.date}" max="${todayStr()}"></div>
+    ${blocks}
+    <div class="actions"><button class="ghost" id="editCancel">Cancel</button><button class="ghost save" id="editSave">Save changes</button></div>
+  </div>`;
+}
+
+function progressHtml(){
+  const map = {};
+  [...state.sessions].reverse().forEach(s => (s.entries || []).forEach(e => {
+    const best = e.sets.reduce((b, x) => e1(x) > e1(b) ? x : b, e.sets[0]);
+    if (e1(best) > 0) (map[e.name] = map[e.name] || []).push({ date: s.date, v: e1(best), set: best });
+  }));
+  const order = [...new Set(PROGRAM.flatMap(p => p.ex.map(x => x[0])))];
+  const names = Object.keys(map).sort((a, b) => (order.indexOf(a) + 1 || 999) - (order.indexOf(b) + 1 || 999));
+  if (!names.length) return `<p class="empty">Log a few sessions with weights to see your progress here.</p>`;
+  return `<p class="status" style="margin:0 0 12px">Best set per session, as estimated 1RM</p>` + names.map(name => {
+    const pts = map[name], pr = pts.reduce((b, x) => x.v > b.v ? x : b), last = pts[pts.length - 1];
+    const tail = pts.slice(-12);
+    let spark = `<p class="meta">Log it twice to see a trend.</p>`;
+    if (tail.length > 1){
+      const min = Math.min(...tail.map(x => x.v)), max = Math.max(...tail.map(x => x.v)), span = max - min || 1;
+      const xy = tail.map((x, i) => [4 + i * (112 / (tail.length - 1)), 28 - ((x.v - min) / span) * 22]);
+      spark = `<svg class="spark" viewBox="0 0 120 32" aria-hidden="true"><polyline points="${xy.map(p => p.map(n => n.toFixed(1)).join(",")).join(" ")}" fill="none" stroke="var(--bone)" stroke-width="1.5"/>
+        <circle cx="${xy[xy.length - 1][0].toFixed(1)}" cy="${xy[xy.length - 1][1].toFixed(1)}" r="3" fill="var(--red-hi)"/></svg>`;
+    }
+    return `<section class="ex prog"><h3>${esc(name)}</h3>
+      <p class="meta"><strong>PR:</strong> ${esc(fmtSets([pr.set]))} (≈${Math.round(pr.v)} kg 1RM), ${esc(fmtDate(pr.date))}</p>
+      <p class="meta">Last: ${esc(fmtSets([last.set]))} (≈${Math.round(last.v)} kg), ${esc(fmtDate(last.date))}</p>
+      ${spark}</section>`;
+  }).join("");
+}
 
 const CHART_MPS = `<svg class="chart" viewBox="0 0 320 180" aria-label="Chart: MPS keeps rising with more sets while MyoPS flattens after about three sets">
   <path d="M40 150 H304 M40 18 V150" stroke="var(--line)" stroke-width="1" fill="none"/>
@@ -624,99 +757,206 @@ function renderStudy(){
     </div>`;
 }
 
-const BACKUP = `<div class="backup"><button class="ghost" id="exportBtn">Export backup</button><button class="ghost" id="importBtn">Import backup</button><input type="file" id="importFile" accept="application/json,.json" hidden></div>`;
-function exportBackup(){
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+
+// ---------- backup ----------
+async function exportBackup(){
+  const json = JSON.stringify(state, null, 2);
+  const name = "ul-log-backup-" + todayStr() + ".json";
+  const done = () => { lsSet("ul-log-lastexport", Date.now()); render(); toast("Backup exported"); };
+  try {
+    const file = new File([json], name, { type: "application/json" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })){
+      await navigator.share({ files: [file], title: "Upper/Lower Log backup" });
+      return done();
+    }
+  } catch (e) { if (e && e.name === "AbortError") return; }
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "ul-log-backup-" + new Date().toISOString().slice(0, 10) + ".json";
-  document.body.appendChild(a); a.click(); a.remove();
+  a.href = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-  toast("Backup exported");
+  done();
 }
 async function importBackup(file){
   try {
     const data = JSON.parse(await file.text());
     if (!data || !Array.isArray(data.sessions)) throw new Error();
     if (!confirm(`Replace your log with this backup (${data.sessions.length} sessions)?`)) return;
-    state = { nextIdx: Number.isInteger(data.nextIdx) ? data.nextIdx : 0, sessions: data.sessions };
-    cacheState(); selIdx = state.nextIdx; render(); toast("Backup imported");
+    state = { nextIdx: 0, sessions: data.sessions };
+    sortSessions(); syncNext(); cacheState(); selIdx = state.nextIdx; render(); toast("Backup imported");
   } catch { toast("That file isn't a valid backup."); }
 }
 
-async function saveSession(){
-  const d = PROGRAM[selIdx];
-  const entries = d.ex.map(([name]) => {
-    const vals = draft.values[d.id + ":" + name] || [];
-    const sets = vals.filter(v => v && String(v.r||"").trim() !== "")
-      .map(v => ({ w: String(v.w||"").trim().replace(",", "."), r: String(v.r).trim(), ...(v.f ? { f: true } : {}) }));
-    return { name, sets };
-  }).filter(e => e.sets.length);
+// ---------- save / edit / delete ----------
+function collectSets(vals, markMissing){
+  const sets = [];
+  (vals || []).forEach((v, i) => {
+    if (!v) return;
+    const r = String(v.r || "").trim(), w = String(v.w || "").trim();
+    if (r) sets.push({ w: w.replace(",", "."), r, ...(v.f ? { f: true } : {}) });
+    else if (w || v.f) markMissing(i);
+  });
+  return sets;
+}
 
+function saveSession(){
+  const d = PROGRAM[selIdx];
+  if (logDate > todayStr()){ toast("You can't log a future date."); return; }
+  missing = new Set();
+  const entries = [];
+  d.ex.forEach(([orig, baseSets]) => {
+    const key = d.id + ":" + orig;
+    const vals = (draft.values[key] || []).slice(0, baseSets + (draft.extra[key] || 0));
+    const sets = collectSets(vals, i => missing.add(key + ":" + i));
+    if (sets.length) entries.push({ name: draft.swaps[key] || orig, sets });
+  });
+  if (missing.size){
+    render();
+    toast("Add reps or clear the weight on the highlighted sets.");
+    const m = document.querySelector(".field.miss input"); if (m) m.scrollIntoView({ block: "center" });
+    return;
+  }
   if (d.id !== "REST" && !entries.length){ toast("Enter reps for at least one set to save."); return; }
 
-  if (selIdx !== state.nextIdx && streakInfo().current > 0 &&
-      !confirm(`${d.name} isn't next in your rotation (${PROGRAM[state.nextIdx].name} is). Logging it breaks your streak. Log it anyway?`)) return;
+  const date = isoFor(logDate);
+  const expected = expectedIdxFor(date);
+  if (selIdx !== expected && streakInfo().current > 0 &&
+      !confirm(`${d.name} isn't next in your rotation (${PROGRAM[expected].name} is). Logging it breaks your streak. Log it anyway?`)) return;
 
-  const session = { id: Date.now().toString(36), date: new Date().toISOString(), dayId: d.id, dayName: d.name, entries };
-  state.sessions.unshift(session);
-  state.nextIdx = (selIdx + 1) % PROGRAM.length;
-  cacheState();
-  draft = { values:{} }; selIdx = state.nextIdx; saveDraft();
-  render();
-  window.scrollTo({top:0});
-  toast(d.id === "REST" ? "Rest day done" : "Session saved");
+  const prs = entries.filter(e => { const before = bestE1(e.name); return before > 0 && Math.max(...e.sets.map(e1)) > before; }).map(e => e.name);
 
-  if (remote){
-    try {
-      await remote.col.doc(session.id).set(session);
-      await remote.profile.set({ nextIdx: state.nextIdx });
-    } catch (e) { toast("Sync failed. The session is saved on this device."); }
-  }
+  state.sessions.push({ id: Date.now().toString(36), date, dayId: d.id, dayName: d.name, entries });
+  sortSessions(); syncNext(); cacheState();
+
+  for (const obj of [draft.values, draft.swaps, draft.extra])
+    Object.keys(obj).forEach(k => { if (k.startsWith(d.id + ":")) delete obj[k]; });
+  selIdx = state.nextIdx; logDate = todayStr(); saveDraft();
+  render(); window.scrollTo({ top: 0 });
+  toast(d.id === "REST" ? "Rest day done" : prs.length ? `Session saved. New PR: ${prs.join(", ")}` : "Session saved");
 }
 
-async function deleteSession(id){
+function startEdit(id){
+  const s = state.sessions.find(s => s.id === id); if (!s) return;
+  const values = {};
+  (s.entries || []).forEach(e => { values[e.name] = e.sets.map(x => ({ ...x })); });
+  editing = { id, date: localStr(new Date(s.date)), values, missing: new Set() };
+  render();
+}
+function saveEdit(){
+  const s = state.sessions.find(s => s.id === editing.id); if (!s) return;
+  if (editing.date > todayStr()){ toast("You can't move a session to a future date."); return; }
+  editing.missing = new Set();
+  const entries = [];
+  Object.entries(editing.values).forEach(([name, vals]) => {
+    const sets = collectSets(vals, i => editing.missing.add(name + ":" + i));
+    if (sets.length) entries.push({ name, sets });
+  });
+  if (editing.missing.size){ render(); toast("Add reps or clear the weight on the highlighted sets."); return; }
+  if (s.dayId !== "REST" && !entries.length){ toast("A session needs at least one set. Delete it instead."); return; }
+  // keep existing entry order, then any newly filled exercises
+  const order = [...(s.entries || []).map(e => e.name), ...entries.map(e => e.name)];
+  s.entries = entries.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
+  if (editing.date !== localStr(new Date(s.date))) s.date = isoFor(editing.date);
+  sortSessions(); syncNext(); cacheState();
+  editing = null; render(); toast("Changes saved");
+}
+function deleteSession(id){
   if (!confirm("Delete this session?")) return;
   state.sessions = state.sessions.filter(s => s.id !== id);
-  cacheState(); render(); toast("Session deleted");
-  if (remote){ try { await remote.col.doc(id).delete(); } catch { toast("Sync failed. Try again later."); } }
+  syncNext(); cacheState();
+  if (!Object.keys(draft.values).some(k => hasDraft(k.split(":")[0]))){ selIdx = state.nextIdx; saveDraft(); }
+  render(); toast("Session deleted");
 }
 
+// ---------- events ----------
+const dArr = (obj, key) => obj[key] || (obj[key] = []);
 document.addEventListener("click", e => {
-  const plate = e.target.closest("[data-day]");
+  const t = e.target;
+  const plate = t.closest("[data-day]");
   if (plate){ selIdx = Number(plate.dataset.day); saveDraft(); render(); return; }
-  const fb = e.target.closest("[data-fkey]");
+
+  const fb = t.closest("[data-fkey]");
   if (fb){
-    const arr = draft.values[fb.dataset.fkey] || (draft.values[fb.dataset.fkey] = []);
-    const i = Number(fb.dataset.i); arr[i] = arr[i] || {}; arr[i].f = !arr[i].f;
+    const arr = dArr(draft.values, fb.dataset.fkey), i = Number(fb.dataset.i);
+    arr[i] = arr[i] || {}; arr[i].f = !arr[i].f;
     fb.classList.toggle("on", arr[i].f); fb.setAttribute("aria-pressed", arr[i].f);
     saveDraft(); return;
   }
-  const opt = e.target.closest("[data-q]");
+  const efb = t.closest("[data-efkey]");
+  if (efb && editing){
+    const arr = dArr(editing.values, efb.dataset.efkey), i = Number(efb.dataset.i);
+    arr[i] = arr[i] || {}; arr[i].f = !arr[i].f;
+    efb.classList.toggle("on", arr[i].f); efb.setAttribute("aria-pressed", arr[i].f); return;
+  }
+  const lw = t.closest("[data-lastw]");
+  if (lw){
+    const key = lw.dataset.lastw, name = draft.swaps[key] || key.split(":").slice(1).join(":");
+    const last = lastFor(name) || [], arr = dArr(draft.values, key);
+    last.forEach((s, i) => { if (s.w){ arr[i] = arr[i] || {}; if (!arr[i].w) arr[i].w = s.w; } });
+    saveDraft(); render(); return;
+  }
+  const sw = t.closest("[data-swap]");
+  if (sw){
+    const key = sw.dataset.swap, orig = key.split(":").slice(1).join(":");
+    const v = prompt(`Swap ${orig} for today. Enter the exercise you're doing instead (leave empty to undo):`, draft.swaps[key] || "");
+    if (v === null) return;
+    const name = v.trim();
+    if (!name || name === orig) delete draft.swaps[key]; else draft.swaps[key] = name.slice(0, 60);
+    saveDraft(); render(); return;
+  }
+  const add = t.closest("[data-addset]");
+  if (add){ const k = add.dataset.addset; draft.extra[k] = Math.min((draft.extra[k] || 0) + 1, 4); saveDraft(); render(); return; }
+  const rm = t.closest("[data-rmset]");
+  if (rm){
+    const k = rm.dataset.rmset, x = (draft.extra[k] || 0) - 1;
+    if (x > 0) draft.extra[k] = x; else delete draft.extra[k];
+    const base = (PROGRAM.find(p => k.startsWith(p.id + ":")).ex.find(e => e[0] === k.split(":").slice(1).join(":")) || [0, 0])[1];
+    if (draft.values[k]) draft.values[k] = draft.values[k].slice(0, base + Math.max(x, 0));
+    saveDraft(); render(); return;
+  }
+  const opt = t.closest("[data-q]");
   if (opt){
     quizAns[Number(opt.dataset.q)] = Number(opt.dataset.o);
-    const y = window.scrollY; render(); window.scrollTo({top:y}); return;
+    const y = window.scrollY; render(); window.scrollTo({ top: y }); return;
   }
-  if (e.target.closest("#exportBtn")){ exportBackup(); return; }
-  if (e.target.closest("#importBtn")){ $("#importFile").click(); return; }
-  const del = e.target.closest("[data-del]");
+  const hv = t.closest("[data-hview]");
+  if (hv){ histView = hv.dataset.hview; editing = null; render(); return; }
+  if (t.closest("#exportBtn")){ exportBackup(); return; }
+  if (t.closest("#importBtn")){ $("#importFile").click(); return; }
+  if (t.closest("#bannerOk")){ lsSet("ul-log-banner-ok", true); render(); return; }
+  if (t.closest("#dateToday")){ logDate = todayStr(); render(); return; }
+  const ed = t.closest("[data-edit]");
+  if (ed){ startEdit(ed.dataset.edit); return; }
+  const ea = t.closest("[data-eadd]");
+  if (ea && editing){ dArr(editing.values, ea.dataset.eadd).push({}); render(); return; }
+  if (t.closest("#editCancel")){ editing = null; render(); return; }
+  if (t.closest("#editSave")){ saveEdit(); return; }
+  const del = t.closest("[data-del]");
   if (del){ deleteSession(del.dataset.del); return; }
 });
 document.addEventListener("change", e => {
   if (e.target.id === "importFile" && e.target.files[0]) importBackup(e.target.files[0]);
+  if (e.target.id === "logDate"){ logDate = e.target.value && e.target.value <= todayStr() ? e.target.value : todayStr(); render(); }
+  if (e.target.id === "editDate" && editing){ editing.date = e.target.value || editing.date; }
 });
 document.addEventListener("input", e => {
-  const el = e.target; if (!el.dataset || !el.dataset.key) return;
-  const arr = draft.values[el.dataset.key] || (draft.values[el.dataset.key] = []);
-  const i = Number(el.dataset.i); arr[i] = arr[i] || {}; arr[i][el.dataset.f] = el.value;
-  saveDraft();
+  const el = e.target, i = Number(el.dataset && el.dataset.i);
+  if (el.dataset && el.dataset.key){
+    const arr = dArr(draft.values, el.dataset.key); arr[i] = arr[i] || {}; arr[i][el.dataset.f] = el.value;
+    if (missing.delete(el.dataset.key + ":" + i)) el.closest(".setrow").querySelector(".field.miss")?.classList.remove("miss");
+    saveDraft();
+  } else if (el.dataset && el.dataset.ekey && editing){
+    const arr = dArr(editing.values, el.dataset.ekey); arr[i] = arr[i] || {}; arr[i][el.dataset.f] = el.value;
+    if (editing.missing.delete(el.dataset.ekey + ":" + i)) el.closest(".setrow").querySelector(".field.miss")?.classList.remove("miss");
+  }
 });
 $("#saveBtn").addEventListener("click", saveSession);
 $("#streak").addEventListener("click", streakToast);
-$("#tab-today").addEventListener("click", () => { tab="today"; render(); });
-$("#tab-history").addEventListener("click", () => { tab="history"; render(); });
-$("#tab-study").addEventListener("click", () => { tab="study"; render(); window.scrollTo({top:0}); });
+$("#tab-today").addEventListener("click", () => { tab = "today"; render(); });
+$("#tab-history").addEventListener("click", () => { tab = "history"; render(); });
+$("#tab-study").addEventListener("click", () => { tab = "study"; render(); window.scrollTo({ top: 0 }); });
 
+sortSessions(); syncNext(); cacheState();
+if (!Number.isInteger(draft.dayIdx)) selIdx = state.nextIdx;
 render();
 
 // Standalone: data lives in this device's storage. Ask the browser to keep it.
