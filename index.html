@@ -201,6 +201,26 @@ h1{text-align:center}
 .editform .datebar{margin:4px 0 10px;justify-content:flex-start}
 .ghost.save{color:#fff;background:var(--red);border-color:var(--red-hi)}
 
+
+/* v3: phone-friendly set rows */
+.setrow{grid-template-columns:30px minmax(0,1fr) minmax(0,1fr) 40px;gap:6px}
+.setrow span{text-align:center;font:700 1.05rem "Barlow Condensed",sans-serif;color:var(--muted)}
+.field{min-width:0}
+.field input{min-width:0;width:100%;font-size:1.2rem;padding:10px 36px 10px 10px;min-height:48px}
+.field em{right:8px;font-size:.78rem}
+.datebar input{min-width:0;max-width:100%}
+@media (max-width:420px){
+  .wrap{padding-left:10px;padding-right:10px}
+  .ex{padding:14px 12px 12px;margin-left:2px;margin-right:2px}
+  .setrow{gap:5px}
+}
+@media (max-width:350px){
+  .setrow{grid-template-columns:22px minmax(0,1fr) minmax(0,1fr) 36px}
+  .field input{padding-right:28px;padding-left:8px}
+  .field em{right:6px;font-size:.7rem}
+  .fail{width:36px;height:36px}
+}
+
 /* splash */
 .splash{position:fixed;inset:0;z-index:100;background:#050505;color:#E9E9E9;display:grid;place-items:center;overflow:hidden;cursor:pointer;transition:opacity .35s ease}
 .splash.out{opacity:0;pointer-events:none}
@@ -504,9 +524,9 @@ function render(){
 }
 
 const setRow = (attrs, i, v, l, miss, label) => `<div class="setrow">
-  <span>Set ${i + 1}</span>
-  <label class="field"><input inputmode="decimal" ${attrs} data-i="${i}" data-f="w" value="${esc(v.w || "")}" placeholder="${esc(l.w ?? "")}" aria-label="${label} set ${i + 1} weight"><em>kg</em></label>
-  <label class="field ${miss ? "miss" : ""}"><input inputmode="numeric" ${attrs} data-i="${i}" data-f="r" value="${esc(v.r || "")}" placeholder="${esc(l.r ?? "")}" aria-label="${label} set ${i + 1} reps"><em>reps</em></label>
+  <span aria-hidden="true">${i + 1}</span>
+  <label class="field"><input inputmode="decimal" ${attrs} data-i="${i}" data-f="w" autocomplete="off" enterkeyhint="next" value="${esc(v.w || "")}" placeholder="${esc(l.w ?? "")}" aria-label="${label} set ${i + 1} weight"><em>kg</em></label>
+  <label class="field ${miss ? "miss" : ""}"><input inputmode="numeric" ${attrs} data-i="${i}" data-f="r" autocomplete="off" enterkeyhint="done" value="${esc(v.r || "")}" placeholder="${esc(l.r ?? "")}" aria-label="${label} set ${i + 1} reps"><em>reps</em></label>
   <button class="fail ${v.f ? "on" : ""}" ${attrs.replace(/data-(e?)key=/, "data-$1fkey=")} data-i="${i}" aria-pressed="${!!v.f}" aria-label="${label} set ${i + 1} taken to failure">${SKULL}</button>
 </div>`;
 
